@@ -11,6 +11,9 @@ A implementation of log-structured fast kv databases based on the idea of Bitcas
   - [ ] Hash
   - [ ] Sorted Set
   - [ ] Maybe More..
+- Support Mutiple Sync Mode
+  - [ ] KeyValMemMode: Store both key and value in memory, faster in reading.
+  - [ ] KeyOnlyMemMode: Store only key in memory, will search in disk for every reading.
 - Support Mutiple Log File Mode
   - [ ] Standard File
   - [ ] MMap File
