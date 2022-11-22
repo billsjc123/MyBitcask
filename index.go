@@ -26,13 +26,13 @@ type IndexNode struct {
 }
 
 type StringIndex struct {
-	mu      *sync.Mutex
+	mu      *sync.RWMutex
 	idxTree art.Tree
 }
 
 func NewStringIndex() *StringIndex {
 	return &StringIndex{
-		mu:      &sync.Mutex{},
+		mu:      new(sync.RWMutex),
 		idxTree: art.New(),
 	}
 }

@@ -51,6 +51,35 @@ func OpenLogFile(path string, fid uint32, filetype DataType, fsize int64) (*LogF
 	return lf, nil
 }
 
+// Write a byte slice at the end of a file
+// Returns an error, if any
+func (f *LogFile) Write(buf []byte) error {
+	if buf == nil || len(buf) == 0 {
+		return nil
+	}
+	n, err := f.IOSelector.Write(buf, f.WriteAt)
+	if err != nil {
+		return err
+	}
+	if n != len(buf) {
+		return consts.ErrWriteSizeNotEqual
+	}
+	return nil
+}
+
+// Read a file from offset with at a length of size
+// Returns byte slice and error, if any
+func (f *LogFile) Read(offset int64, size uint32) ([]byte, error) {
+	if size < 0 {
+		return []byte{}, nil
+	}
+	buf := make([]byte, size)
+	if _, err := f.IOSelector.Read(buf, offset); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
 func getLogFileName(path string, fid uint32, filetype DataType) string {
 	return path + string(os.PathSeparator) + LogFilePrefix + DataTypeStrMap[filetype] + "." + strconv.Itoa(int(fid))
 }
@@ -58,10 +87,9 @@ func getLogFileName(path string, fid uint32, filetype DataType) string {
 // Read a log entry from given offset
 // Return a LogEntry if offset is valid
 // Return err:io.EOF if offset is invalid
-func (f *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
+func (f *LogFile) readLogEntry(offset int64) (*LogEntry, int64, error) {
 	// read header from file
-	headerbuf := make([]byte, MaxHeaderSize)
-	_, err := f.IOSelector.Read(headerbuf, offset)
+	headerbuf, err := f.Read(offset, MaxHeaderSize)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -73,22 +101,22 @@ func (f *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 		return nil, 0, consts.ErrEndOfEntry
 	}
 
+	key, err := f.Read(offset+int64(index)+1, header.keySize)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	val, err := f.Read(offset+int64(index)+int64(header.keySize)+1, header.valSize)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	entry := &LogEntry{
-		key:      make([]byte, header.keySize),
-		val:      make([]byte, header.valSize),
+		key:      key,
+		val:      val,
 		expireAt: header.expireAt,
 		typ:      header.typ,
 	}
 
-	kSize, err := f.IOSelector.Read(entry.key, offset+int64(index)+1)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	vSize, err := f.IOSelector.Read(entry.val, offset+int64(index)+int64(kSize)+1)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	return entry, int64(index) + int64(kSize) + int64(vSize), nil
+	return entry, int64(index) + int64(header.keySize) + int64(header.valSize), nil
 }

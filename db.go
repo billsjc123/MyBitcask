@@ -85,26 +85,41 @@ func (db *MyBitcask) Close() error {
 	return nil
 }
 
-func (db *MyBitcask) WriteLogEntry(entry *LogEntry, dataType DataType) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	activeLogFile := db.activeLogFile[dataType]
-	if activeLogFile == nil {
-		var err error
-		activeLogFile, err = OpenLogFile(db.options.DBPath, 1, dataType, db.options.LogFileSizeThreshold)
-		if err != nil {
-			return err
-		}
-		db.activeLogFile[dataType] = activeLogFile
+func (db *MyBitcask) writeLogEntry(entry *LogEntry, dataType DataType) (*valuePos, error) {
+	if err := db.initLogFile(dataType); err != nil {
+		return nil, err
 	}
+
+	activeLogFile := db.getActiveLogFile(dataType)
 	// encode header
 	buf, size := entry.Encode()
+
+	// if file size larger than threshold, create a new file
+	if activeLogFile.WriteAt+int64(size) > db.options.LogFileSizeThreshold {
+		if err := activeLogFile.IOSelector.Sync(); err != nil {
+			return nil, err
+		}
+		db.mu.Lock()
+		newFid := db.activeLogFile[dataType].Fid + 1
+		newActiveLogFile, err := OpenLogFile(db.options.DBPath, newFid, dataType, db.options.LogFileSizeThreshold)
+		if err != nil {
+			db.mu.Unlock()
+			return nil, err
+		}
+		if db.arcivedLogFile[dataType] == nil {
+			db.arcivedLogFile[dataType] = make(map[uint32]*LogFile)
+		}
+		db.arcivedLogFile[dataType][activeLogFile.Fid] = activeLogFile
+		db.activeLogFile[dataType] = newActiveLogFile
+		db.mu.Unlock()
+	}
+
 	// write
-	n, err := activeLogFile.IOSelector.Write(buf, activeLogFile.WriteAt)
+	writeAt := atomic.LoadInt64(&activeLogFile.WriteAt)
+	n, err := activeLogFile.IOSelector.Write(buf, writeAt)
 	if err != nil {
 		logger.Errorf("Write Log Entry Failed: %v", err)
-		return err
+		return nil, err
 	}
 	// update index
 	valPos := &valuePos{
@@ -112,26 +127,14 @@ func (db *MyBitcask) WriteLogEntry(entry *LogEntry, dataType DataType) error {
 		offset:    activeLogFile.WriteAt,
 		entrySize: int64(size),
 	}
-	db.buildIndex(dataType, entry, valPos)
 
 	// update file writeAt
 	activeLogFile.WriteAt += int64(n)
 
-	// if file size larger than threshold, create a new file
-	if activeLogFile.WriteAt > db.options.LogFileSizeThreshold {
-		newFid := db.activeLogFile[dataType].Fid + 1
-		newActiveLogFile, err := OpenLogFile(db.options.DBPath, newFid, dataType, db.options.LogFileSizeThreshold)
-		if err != nil {
-			return err
-		}
-
-		db.arcivedLogFile[dataType][activeLogFile.Fid] = activeLogFile
-		db.activeLogFile[dataType] = newActiveLogFile
-	}
-	return nil
+	return valPos, nil
 }
 
-func (db *MyBitcask) ReadLogEntry(index *IndexNode, dataType DataType) *LogEntry {
+func (db *MyBitcask) readLogEntry(index *IndexNode, dataType DataType) *LogEntry {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
@@ -148,12 +151,29 @@ func (db *MyBitcask) ReadLogEntry(index *IndexNode, dataType DataType) *LogEntry
 		}
 	}
 
-	entry, _, err := lf.ReadLogEntry(index.offset)
+	entry, _, err := lf.readLogEntry(index.offset)
 	if err != nil {
 		return &LogEntry{}
 	}
 
 	return entry
+}
+
+func (db *MyBitcask) initLogFile(dataType DataType) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if db.activeLogFile[dataType] != nil {
+		return nil
+	}
+
+	var err error
+	lf, err := OpenLogFile(db.options.DBPath, 1, dataType, db.options.LogFileSizeThreshold)
+	if err != nil {
+		return err
+	}
+	db.activeLogFile[dataType] = lf
+	return nil
 }
 
 func (db *MyBitcask) loadLogFile() error {
@@ -196,6 +216,9 @@ func (db *MyBitcask) loadLogFile() error {
 			if i == len(fids)-1 {
 				db.activeLogFile[dtype] = lf
 			} else {
+				if db.arcivedLogFile[dtype] == nil {
+					db.arcivedLogFile[dtype] = make(map[uint32]*LogFile)
+				}
 				db.arcivedLogFile[dtype][fid] = lf
 			}
 		}
@@ -225,7 +248,7 @@ func (db *MyBitcask) loadIndexFromLogFile() error {
 
 			var offset int64
 			for {
-				entry, size, err := lf.ReadLogEntry(offset)
+				entry, size, err := lf.readLogEntry(offset)
 				if err != nil {
 					if err == io.EOF || err == consts.ErrEndOfEntry {
 						break
@@ -257,7 +280,29 @@ func (db *MyBitcask) loadIndexFromLogFile() error {
 	return nil
 }
 
+func (db *MyBitcask) getActiveLogFile(dataType DataType) *LogFile {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.activeLogFile[dataType]
+}
+
+func updateIdxTree(idxTree art.Tree, valPos *valuePos, entry *LogEntry) error {
+	indexNode := &IndexNode{
+		fid:       valPos.fid,
+		offset:    valPos.offset,
+		entrySize: valPos.entrySize,
+	}
+	if entry.expireAt != 0 {
+		indexNode.expireAt = entry.expireAt
+	}
+	idxTree.Insert(art.Key(entry.key), art.Value(indexNode))
+	return nil
+}
+
 func (db *MyBitcask) buildIndex(dataType DataType, entry *LogEntry, valPos *valuePos) {
+	if entry.expireAt != 0 && entry.expireAt < time.Now().Unix() {
+		return
+	}
 	switch dataType {
 	case String:
 		db.buildStrIndex(entry, valPos)
@@ -279,4 +324,37 @@ func (db *MyBitcask) buildStrIndex(entry *LogEntry, valPos *valuePos) {
 	}
 
 	db.strIndex.idxTree.Insert(art.Key(entry.key), art.Value(indexNode))
+}
+
+func (db *MyBitcask) getVal(idxTree art.Tree, key []byte, dataType DataType) ([]byte, error) {
+	v, ok := idxTree.Search(art.Key(key))
+	if !ok {
+		return nil, consts.ErrKeyNotFound
+	}
+
+	index, _ := v.(*IndexNode)
+	ts := time.Now().Unix()
+	if index.expireAt != 0 && ts > index.expireAt {
+		return nil, consts.ErrKeyNotFound
+	}
+
+	entry := db.readLogEntry(index, String)
+	return entry.val, nil
+}
+
+func (db *MyBitcask) getIndexNode(idxTree art.Tree, key []byte) (*IndexNode, error) {
+	v, ok := idxTree.Search(art.Key(key))
+	if !ok {
+		return nil, consts.ErrKeyNotFound
+	}
+
+	index, _ := v.(*IndexNode)
+	ts := time.Now().Unix()
+	// lazy delete
+	if index.expireAt != 0 && ts > index.expireAt {
+		idxTree.Delete(art.Key(key))
+		return nil, consts.ErrKeyNotFound
+	}
+
+	return index, nil
 }
