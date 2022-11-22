@@ -1,5 +1,5 @@
 package consts
 
 const (
-	LogFileNameSplitedLength = 4
+	LogFileNameSplitedLength = 3
 )

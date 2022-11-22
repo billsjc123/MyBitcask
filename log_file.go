@@ -61,7 +61,7 @@ func getLogFileName(path string, fid uint32, filetype DataType) string {
 func (f *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 	// read header from file
 	headerbuf := make([]byte, MaxHeaderSize)
-	headerSize, err := f.IOSelector.Read(headerbuf, offset)
+	_, err := f.IOSelector.Read(headerbuf, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -80,15 +80,15 @@ func (f *LogFile) ReadLogEntry(offset int64) (*LogEntry, int64, error) {
 		typ:      header.typ,
 	}
 
-	kSize, err := f.IOSelector.Read(entry.key, offset+int64(headerSize))
+	kSize, err := f.IOSelector.Read(entry.key, offset+int64(index)+1)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	vSize, err := f.IOSelector.Read(entry.val, offset+int64(headerSize)+int64(header.keySize))
+	vSize, err := f.IOSelector.Read(entry.val, offset+int64(index)+int64(kSize)+1)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	return entry, int64(headerSize) + int64(kSize) + int64(vSize), nil
+	return entry, int64(index) + int64(kSize) + int64(vSize), nil
 }

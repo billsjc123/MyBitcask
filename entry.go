@@ -59,7 +59,7 @@ func decodeHeader(buf []byte) (*entryHeader, int64) {
 	}
 	header := &entryHeader{}
 	header.crc32 = binary.BigEndian.Uint32(buf[:4])
-	header.typ = EntryType(buf[5])
+	header.typ = EntryType(buf[4])
 
 	var index = 5
 	kSize, n := binary.Varint(buf[index:])
