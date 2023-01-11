@@ -19,6 +19,8 @@ var (
 
 	ErrKeyNotFound error = errors.New("Key is not found")
 
+	ErrKeyIsNil error = errors.New("Key is nil")
+
 	ErrWrongNumOfArgs error = errors.New("Number of argument is not correct")
 
 	ErrWrongValueType error = errors.New("Value is not a Integer")

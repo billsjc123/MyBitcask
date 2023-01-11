@@ -333,7 +333,7 @@ func (db *MyBitcask) getVal(idxTree art.Tree, key []byte, dataType DataType) ([]
 	}
 
 	index, _ := v.(*IndexNode)
-	ts := time.Now().Unix()
+	ts := time.Now().UnixMilli()
 	if index.expireAt != 0 && ts > index.expireAt {
 		return nil, consts.ErrKeyNotFound
 	}

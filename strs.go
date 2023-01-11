@@ -153,7 +153,7 @@ func (db *MyBitcask) SetEX(key, value []byte, duration time.Duration) error {
 	entry := &LogEntry{
 		key:      key,
 		val:      value,
-		expireAt: time.Now().Add(duration).Unix(),
+		expireAt: time.Now().Add(duration).UnixMilli(),
 	}
 	valPos, err := db.writeLogEntry(entry, String)
 	if err != nil {
@@ -267,7 +267,7 @@ func (db *MyBitcask) Append(key, value []byte) error {
 	defer db.strIndex.mu.Unlock()
 
 	oldVal, err := db.getVal(db.strIndex.idxTree, key, String)
-	if err != nil {
+	if err != nil && err != consts.ErrKeyNotFound {
 		return err
 	}
 	if oldVal != nil {
@@ -325,6 +325,10 @@ func (db *MyBitcask) IncrBy(key []byte, incr int64) (int64, error) {
 func (db *MyBitcask) incrDecrBy(key []byte, incr int64) (int64, error) {
 	db.strIndex.mu.Lock()
 	defer db.strIndex.mu.Unlock()
+
+	if key == nil {
+		return 0, consts.ErrKeyIsNil
+	}
 
 	oldVal, err := db.getVal(db.strIndex.idxTree, key, String)
 	if err != nil && err != consts.ErrKeyNotFound {
