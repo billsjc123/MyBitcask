@@ -101,12 +101,12 @@ func (f *LogFile) readLogEntry(offset int64) (*LogEntry, int64, error) {
 		return nil, 0, consts.ErrEndOfEntry
 	}
 
-	key, err := f.Read(offset+int64(index)+1, header.keySize)
+	key, err := f.Read(offset+int64(index), header.keySize)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	val, err := f.Read(offset+int64(index)+int64(header.keySize)+1, header.valSize)
+	val, err := f.Read(offset+int64(index)+int64(header.keySize), header.valSize)
 	if err != nil {
 		return nil, 0, err
 	}

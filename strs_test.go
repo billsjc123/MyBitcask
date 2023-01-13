@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
+	"gotest.tools/v3/assert"
 )
 
 func TestSet(t *testing.T) {
@@ -58,7 +58,7 @@ func TestSet_LogFileThreshold(t *testing.T) {
 
 	for i := 0; i <= 600000; i++ {
 		err := db.Set(GetKey(i), GetValue128B())
-		assert.Nil(t, err)
+		assert.NilError(t, err)
 	}
 }
 
@@ -116,13 +116,13 @@ func TestGet_LogFileThreshold(t *testing.T) {
 	writeCnt := 600000
 	for i := 0; i <= writeCnt; i++ {
 		err := db.Set(GetKey(i), GetValue128B())
-		assert.Nil(t, err)
+		assert.NilError(t, err)
 	}
 
 	for i := 0; i <= 10000; i++ {
 		v, err := db.Get(GetKey(rand.Intn(writeCnt)))
-		assert.Nil(t, err)
-		assert.NotNil(t, v)
+		assert.NilError(t, err)
+		assert.Assert(t, v != nil)
 	}
 }
 
@@ -482,27 +482,27 @@ func TestSetEX(t *testing.T) {
 
 	defer destoryDB(db)
 
-	err := db.SetEX(GetKey(1), GetValue128B(), time.Millisecond*200)
-	assert.Nil(t, err)
-	time.Sleep(time.Millisecond * 205)
+	err := db.SetEX(GetKey(1), GetValue128B(), time.Second)
+	assert.NilError(t, err)
+	time.Sleep(time.Second * 2)
 	v, err := db.Get(GetKey(1))
 	assert.Equal(t, 0, len(v))
 	assert.Equal(t, consts.ErrKeyNotFound, err)
 
-	err = db.SetEX(GetKey(2), GetValue128B(), time.Second*200)
-	assert.Nil(t, err)
-	time.Sleep(time.Millisecond * 200)
+	err = db.SetEX(GetKey(2), GetValue128B(), time.Second*3)
+	assert.NilError(t, err)
+	time.Sleep(time.Second)
 	v1, err := db.Get(GetKey(2))
-	assert.NotNil(t, v1)
-	assert.Nil(t, err)
+	assert.Assert(t, v1 != nil)
+	assert.NilError(t, err)
 
 	// Set an existed key
 	err = db.Set(GetKey(3), GetValue128B())
-	assert.Nil(t, err)
+	assert.NilError(t, err)
 
-	err = db.SetEX(GetKey(3), GetValue128B(), time.Millisecond*200)
-	assert.Nil(t, err)
-	time.Sleep(time.Millisecond * 205)
+	err = db.SetEX(GetKey(3), GetValue128B(), time.Second)
+	assert.NilError(t, err)
+	time.Sleep(time.Second * 2)
 	v2, err := db.Get(GetKey(3))
 	assert.Equal(t, 0, len(v2))
 	assert.Equal(t, consts.ErrKeyNotFound, err)
@@ -834,4 +834,488 @@ func TestDecr(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIncr(t *testing.T) {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "tmp")
+	opts := DefaultOptions(path)
+	db := Open(opts)
+
+	defer destoryDB(db)
+
+	db.Set([]byte("k1"), []byte("123"))
+	db.Set([]byte("k-wrong-type"), []byte("string"))
+	db.Set([]byte("k-max-int"), []byte(strconv.Itoa(math.MaxInt64)))
+
+	type args struct {
+		key []byte
+	}
+	tests := []struct {
+		name    string
+		db      *MyBitcask
+		args    args
+		wantErr bool
+		expErr  error
+		expVal  int64
+		expByte []byte
+	}{
+		{
+			name: "normal",
+			db:   db,
+			args: args{
+				key: []byte("k1"),
+			},
+			wantErr: false,
+			expVal:  124,
+			expByte: []byte("124"),
+		},
+		{
+			name: "not existed key",
+			db:   db,
+			args: args{
+				key: []byte("k-not-existed"),
+			},
+			wantErr: false,
+			expVal:  1,
+			expByte: []byte("1"),
+		},
+		{
+			name: "not integer type",
+			db:   db,
+			args: args{
+				key: []byte("k-wrong-type"),
+			},
+			wantErr: true,
+			expErr:  consts.ErrWrongValueType,
+			expByte: []byte("string"),
+		},
+		{
+			name: "integer overflow",
+			db:   db,
+			args: args{
+				key: []byte("k-max-int"),
+			},
+			wantErr: true,
+			expErr:  consts.ErrIntegerOverflow,
+			expByte: []byte(strconv.Itoa(math.MaxInt64)),
+		},
+		{
+			name: "nil key",
+			db:   db,
+			args: args{
+				key: nil,
+			},
+			wantErr: true,
+			expErr:  consts.ErrKeyIsNil,
+			expVal:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.db.Incr(tt.args.key)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Incr() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr == false && got != tt.expVal {
+				t.Errorf("expected new value = %v, got = %v", tt.expVal, got)
+			}
+			val, _ := tt.db.Get(tt.args.key)
+			if tt.expByte != nil && !bytes.Equal(val, tt.expByte) {
+				t.Errorf("expected byte = %s, got = %v", tt.expByte, string(val))
+			}
+		})
+	}
+}
+
+func TestStrLen(t *testing.T) {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "tmp")
+	opts := DefaultOptions(path)
+	db := Open(opts)
+
+	defer destoryDB(db)
+
+	db.Set([]byte("k1"), []byte("123"))
+
+	type args struct {
+		Key []byte
+	}
+	tests := []struct {
+		name string
+		db   *MyBitcask
+		args args
+		want int
+	}{
+		{
+			name: "normal",
+			db:   db,
+			args: args{
+				Key: []byte("k1"),
+			},
+			want: 3,
+		},
+		{
+			name: "not exist key",
+			db:   db,
+			args: args{
+				Key: []byte("not exist key"),
+			},
+			want: 0,
+		},
+		{
+			name: "nil key",
+			db:   db,
+			args: args{Key: nil},
+			want: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.db.StrLen(tt.args.Key)
+			if got != tt.want {
+				t.Errorf("want = %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestCount(t *testing.T) {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "tmp")
+	opts := DefaultOptions(path)
+	db := Open(opts)
+
+	defer destoryDB(db)
+
+	expCnt := 0
+	got := db.Count()
+	assert.Equal(t, expCnt, got)
+
+	db.Set([]byte("k1"), []byte("123"))
+	db.Set([]byte("k2"), []byte("123"))
+	db.Set([]byte("k3"), []byte("123"))
+
+	expCnt = 3
+	got = db.Count()
+	assert.Equal(t, expCnt, got)
+
+	db.Delete([]byte("k1"))
+	expCnt = 2
+	got = db.Count()
+	assert.Equal(t, expCnt, got)
+}
+
+func TestScan(t *testing.T) {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "tmp")
+	opts := DefaultOptions(path)
+	db := Open(opts)
+
+	defer destoryDB(db)
+
+	db.Set([]byte("k1"), []byte("v1"))
+	db.Set([]byte("k12"), []byte("v12"))
+	db.Set([]byte("k123"), []byte("v123"))
+	db.Set([]byte("k1234"), []byte("v1234"))
+	db.Set([]byte("k2"), []byte("v2"))
+	db.Set([]byte("different"), []byte("vd"))
+
+	type args struct {
+		prefix  []byte
+		pattern string
+		count   int
+	}
+	tests := []struct {
+		name    string
+		db      *MyBitcask
+		args    args
+		want    [][]byte
+		wantErr bool
+	}{
+		{
+			name: "only prefix",
+			db:   db,
+			args: args{
+				prefix:  []byte("k12"),
+				pattern: "",
+				count:   5,
+			},
+			want: [][]byte{
+				[]byte("k12"), []byte("v12"),
+				[]byte("k123"), []byte("v123"),
+				[]byte("k1234"), []byte("v1234"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "only pattern",
+			db:   db,
+			args: args{
+				prefix:  []byte(""),
+				pattern: "k.*",
+				count:   5,
+			},
+			want: [][]byte{
+				[]byte("k1"), []byte("v1"),
+				[]byte("k12"), []byte("v12"),
+				[]byte("k123"), []byte("v123"),
+				[]byte("k1234"), []byte("v1234"),
+				[]byte("k2"), []byte("v2"),
+			},
+			wantErr: false,
+		},
+		{
+			name: "nil prefix",
+			db:   db,
+			args: args{
+				prefix:  nil,
+				pattern: "",
+				count:   5,
+			},
+			want:    [][]byte{},
+			wantErr: false,
+		},
+		{
+			name: "count < 0",
+			db:   db,
+			args: args{
+				prefix:  []byte(""),
+				pattern: "",
+				count:   -1,
+			},
+			want:    [][]byte{},
+			wantErr: false,
+		},
+		{
+			name: "count > actual number of matched",
+			db:   db,
+			args: args{
+				prefix:  []byte("k123"),
+				pattern: "",
+				count:   10,
+			},
+			want: [][]byte{
+				[]byte("k123"), []byte("v123"),
+				[]byte("k1234"), []byte("v1234"),
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.db.Scan(tt.args.prefix, tt.args.pattern, tt.args.count)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Scan got err: %v, wantErr %v", err, tt.wantErr)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("want = %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestExpire(t *testing.T) {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "tmp")
+	opts := DefaultOptions(path)
+	db := Open(opts)
+
+	defer destoryDB(db)
+
+	db.Set([]byte("k1"), []byte("v1"))
+	db.Set([]byte("k2"), []byte("v2"))
+
+	type args struct {
+		key      []byte
+		duration time.Duration
+	}
+	tests := []struct {
+		name      string
+		db        *MyBitcask
+		args      args
+		sleepTime time.Duration
+		want      []byte
+		wantErr   bool
+	}{
+		{
+			name: "normal",
+			db:   db,
+			args: args{
+				key:      []byte("k1"),
+				duration: time.Second,
+			},
+			want:      []byte(""),
+			sleepTime: time.Second * 2,
+			wantErr:   false,
+		},
+		{
+			name: "non exist key",
+			db:   db,
+			args: args{
+				key:      []byte("key not exist"),
+				duration: time.Second,
+			},
+			want:      []byte(""),
+			sleepTime: time.Second,
+			wantErr:   false,
+		},
+		{
+			name: "before expiration",
+			db:   db,
+			args: args{
+				key:      []byte("k2"),
+				duration: time.Second * 3,
+			},
+			want:      []byte("v2"),
+			sleepTime: time.Second,
+			wantErr:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.db.Expire(tt.args.key, tt.args.duration)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Expire got err: %v, wantErr %v", err, tt.wantErr)
+			}
+			time.Sleep(tt.sleepTime)
+			got, _ := tt.db.Get(tt.args.key)
+			if !bytes.Equal(got, tt.want) {
+				t.Errorf("want %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestTTL(t *testing.T) {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "tmp")
+	opts := DefaultOptions(path)
+	db := Open(opts)
+
+	defer destoryDB(db)
+
+	t1, err := db.TTL(GetKey(111))
+	assert.Equal(t, int64(0), t1)
+	assert.Equal(t, consts.ErrKeyNotFound, err)
+
+	err = db.SetEX(GetKey(123), GetValue16B(), time.Second*30)
+	assert.NilError(t, err)
+
+	t2, err := db.TTL(GetKey(123))
+	assert.Equal(t, int64(30), t2)
+	assert.NilError(t, err)
+
+	err = db.Set(GetKey(007), GetValue16B())
+	assert.NilError(t, err)
+	db.Expire(GetKey(007), time.Second*50)
+
+	t3, err := db.TTL(GetKey(007))
+	assert.Equal(t, int64(50), t3)
+	assert.NilError(t, err)
+
+	db.SetEX(GetKey(999), GetValue16B(), time.Second*5)
+	db.Expire(GetKey(999), time.Second*100)
+	db.Expire(GetKey(999), time.Second*10)
+
+	t4, err := db.TTL(GetKey(999))
+	assert.Equal(t, int64(10), t4)
+	assert.NilError(t, err)
+}
+
+func TestPersist(t *testing.T) {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "tmp")
+	opts := DefaultOptions(path)
+	db := Open(opts)
+
+	defer destoryDB(db)
+
+	db.Set([]byte("k1"), []byte("v1"))
+	db.SetEX([]byte("k2"), []byte("v2"), time.Second*100)
+
+	type args struct {
+		key []byte
+	}
+	tests := []struct {
+		name    string
+		db      *MyBitcask
+		args    args
+		wantTTL int64
+		wantErr bool
+		expErr  error
+	}{
+		{
+			name: "normal-not set expire",
+			db:   db,
+			args: args{
+				key: []byte("k1"),
+			},
+			wantTTL: 0,
+			wantErr: false,
+		},
+		{
+			name: "normal-set expire",
+			db:   db,
+			args: args{
+				key: []byte("k2"),
+			},
+			wantTTL: 0,
+			wantErr: false,
+		},
+		{
+			name: "not exist key",
+			db:   db,
+			args: args{
+				key: []byte("key not exist"),
+			},
+			wantTTL: 0,
+			wantErr: true,
+			expErr:  consts.ErrKeyNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.db.Persist(tt.args.key)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Persist got err: %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && err != tt.expErr {
+				t.Errorf("expect error: %v, got: %v", tt.expErr, err)
+			}
+			got, _ := tt.db.TTL(tt.args.key)
+			if got != tt.wantTTL {
+				t.Errorf("wantTTL %v, got %v", tt.wantTTL, got)
+			}
+		})
+	}
+}
+
+func TestGetStrsKeys(t *testing.T) {
+	wd, _ := os.Getwd()
+	path := filepath.Join(wd, "tmp")
+	opts := DefaultOptions(path)
+	db := Open(opts)
+
+	defer destoryDB(db)
+
+	want := [][]byte{}
+	got, err := db.GetStrsKeys()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, want)
+
+	db.Set([]byte("k1"), []byte("v1"))
+	db.Set([]byte("k2"), []byte("v2"))
+	want = [][]byte{[]byte("k1"), []byte("k2")}
+	got, err = db.GetStrsKeys()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, want)
+
+	db.Delete([]byte("k1"))
+	want = [][]byte{[]byte("k2")}
+	got, err = db.GetStrsKeys()
+	assert.NilError(t, err)
+	assert.DeepEqual(t, got, want)
 }

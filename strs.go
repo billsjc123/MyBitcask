@@ -153,7 +153,7 @@ func (db *MyBitcask) SetEX(key, value []byte, duration time.Duration) error {
 	entry := &LogEntry{
 		key:      key,
 		val:      value,
-		expireAt: time.Now().Add(duration).UnixMilli(),
+		expireAt: time.Now().Add(duration).Unix(),
 	}
 	valPos, err := db.writeLogEntry(entry, String)
 	if err != nil {
@@ -393,7 +393,7 @@ func (db *MyBitcask) Count() int {
 
 // Scan iterates over all keys of type String and finds its value.
 // Parameter prefix will match key`s prefix, and pattern is a regular expression that also matchs the key.
-// Parameter count limits the number of keys, a nil slice will be returned if count is not a positive number.
+// Parameter count limits the number of keys, a empty slice will be returned if count is not a positive number.
 // The returned values will be a mixed data of keys and values, like [key1, value1, key2, value2, etc...].
 func (db *MyBitcask) Scan(prefix []byte, pattern string, count int) ([][]byte, error) {
 	if count <= 0 || db.strIndex.idxTree == nil {
@@ -412,11 +412,12 @@ func (db *MyBitcask) Scan(prefix []byte, pattern string, count int) ([][]byte, e
 	db.strIndex.mu.RLock()
 	defer db.strIndex.mu.RUnlock()
 
+	// true for continue searching
 	db.strIndex.idxTree.ForEachPrefix(art.Key(prefix), func(node art.Node) (cont bool) {
 		if node.Kind() != art.Leaf {
 			return true
 		}
-		if !reg.Match(node.Key()) {
+		if reg != nil && !reg.Match([]byte(node.Key())) {
 			return true
 		}
 		val, err := db.getVal(db.strIndex.idxTree, node.Key(), String)
@@ -440,6 +441,10 @@ func (db *MyBitcask) Expire(key []byte, duration time.Duration) error {
 	}
 	db.strIndex.mu.RLock()
 	val, err := db.getVal(db.strIndex.idxTree, key, String)
+	if err == consts.ErrKeyNotFound {
+		db.strIndex.mu.RUnlock()
+		return nil
+	}
 	if err != nil {
 		db.strIndex.mu.RUnlock()
 		return err

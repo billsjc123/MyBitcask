@@ -149,6 +149,10 @@ func GetValue(n int) []byte {
 	return str.Bytes()
 }
 
+func GetValue16B() []byte {
+	return GetValue(16)
+}
+
 func GetValue128B() []byte {
 	return GetValue(128)
 }

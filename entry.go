@@ -66,14 +66,13 @@ func decodeHeader(buf []byte) (*entryHeader, int64) {
 	index += n
 	vSize, n := binary.Varint(buf[index:])
 	index += n
+	expireAt, n := binary.Varint(buf[index:])
+	index += n
 
 	header.keySize = uint32(kSize)
 	header.valSize = uint32(vSize)
+	header.expireAt = int64(expireAt)
 	return header, int64(index)
-}
-
-func getEntryChecksum() {
-
 }
 
 func DecodeEntry(buf []byte) (*LogEntry, error) {
